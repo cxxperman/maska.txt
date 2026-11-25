@@ -1,0 +1,492 @@
+/*
+ * Maska: the lines over the voice and profile panel (links.tsx): what kapsula.txt plays ("Музыка из kapsula.txt"),
+ * with its card, and what Steam downloads, from arkada.txt ("Steam из arkada.txt"). The tokens come from kit.css
+ * (.vc-maska-links is in its scope). Works in both themes and without the dev.txt look; in Islands the bar sits at
+ * the top of the panel's island, a thin line under it.
+ *
+ * The spring is a copy of the one in aura.css and islands.css (kit.txt motion.spring.shape, stiffness 250,
+ * damping 23, mass 1, sampled into linear()).
+ */
+
+.vc-maska-links {
+    --maska-links-spring: linear(
+        0,
+        0.073,
+        0.23,
+        0.412,
+        0.587,
+        0.734,
+        0.849,
+        0.93,
+        0.984,
+        1.015,
+        1.031,
+        1.035,
+        1.033,
+        1.028,
+        1.021,
+        1.015,
+        1.01,
+        1.006,
+        1.003,
+        1.001,
+        1,
+        0.999,
+        0.999,
+        0.999,
+        1
+    );
+    --maska-links-dur: var(--maska-dur, 167ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vc-maska-links {
+        --maska-links-dur: 0ms;
+    }
+}
+
+.vc-maska-links-slot:empty {
+    display: none;
+}
+
+/* The bar and its lines */
+.vc-maska-links-bar {
+    display: flex;
+    flex-direction: column;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--dt-edge);
+    font: 400 13px / 1.3 var(--dt-font-text);
+    color: var(--dt-label);
+}
+
+.vc-maska-links-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding: 6px;
+    border-radius: var(--dt-radius-row);
+}
+
+.vc-maska-links-row--media {
+    cursor: pointer;
+}
+
+.vc-maska-links-row--media:hover,
+.vc-maska-links-row--media[aria-expanded="true"] {
+    background: var(--dt-fill);
+}
+
+.vc-maska-links-row--media:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--dt-accent) 70%, transparent);
+    outline-offset: -2px;
+}
+
+.vc-maska-links-art {
+    position: relative;
+    flex: none;
+    width: 32px;
+    height: 32px;
+}
+
+.vc-maska-links-cover {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    object-fit: cover;
+    color: rgb(255 255 255 / 0.92);
+}
+
+.vc-maska-links-cover--steam {
+    background: var(--dt-fill-2);
+    color: var(--dt-label-2);
+}
+
+.vc-maska-links-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.vc-maska-links-title,
+.vc-maska-links-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vc-maska-links-title {
+    font-weight: 600;
+}
+
+.vc-maska-links-sub {
+    font-size: var(--dt-size-caption);
+    color: var(--dt-label-3);
+}
+
+/* the thin progress line along the bottom of a line */
+.vc-maska-links-line {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 0;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--dt-fill-2);
+    overflow: hidden;
+}
+
+.vc-maska-links-line::after {
+    content: "";
+    display: block;
+    height: 100%;
+    width: calc(var(--value, 0) * 100%);
+    background: var(--maska-track, var(--dt-accent));
+    transition:
+        width 500ms linear,
+        background-color 400ms ease;
+}
+
+/* The buttons: round, the middle one a little glass */
+.vc-maska-links-controls {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.vc-maska-links-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: none;
+    color: var(--dt-label-2);
+    cursor: pointer;
+    transition: transform var(--maska-links-dur) var(--dt-ease-out);
+}
+
+.vc-maska-links-btn:hover {
+    background: var(--dt-fill-2);
+    color: var(--dt-label);
+}
+
+.vc-maska-links-btn:active {
+    transform: scale(0.92);
+    transition-duration: calc(var(--maska-links-dur) * 0.5);
+}
+
+.vc-maska-links-btn--main {
+    background: var(--dt-glass);
+    border-color: var(--dt-edge);
+    border-top-color: var(--dt-edge-top);
+    color: var(--dt-label);
+}
+
+.vc-maska-links-btn--main:hover {
+    background: var(--dt-glass-hover);
+}
+
+/* While it plays: the cover dims and white bars rise over its middle, in place of the note */
+@keyframes maska-links-eq {
+    0%,
+    100% {
+        transform: scaleY(0.3);
+    }
+
+    50% {
+        transform: scaleY(1);
+    }
+}
+
+.vc-maska-links-eq {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-radius: 6px;
+    background: rgb(0 0 0 / 0.38);
+}
+
+.vc-maska-links-art:has(.vc-maska-links-eq) .vc-maska-links-cover svg {
+    opacity: 0;
+}
+
+.vc-maska-links-eq i {
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: #fff;
+    animation: maska-links-eq calc(var(--maska-links-dur) * 5.4) ease-in-out infinite;
+}
+
+/* each bar its own pace, so they do not move as one */
+.vc-maska-links-eq i:nth-child(1) {
+    animation-duration: calc(var(--maska-links-dur) * 4.6);
+    animation-delay: calc(var(--maska-links-dur) * -1.2);
+}
+
+.vc-maska-links-eq i:nth-child(2) {
+    animation-duration: calc(var(--maska-links-dur) * 6.2);
+    animation-delay: calc(var(--maska-links-dur) * -3.1);
+}
+
+.vc-maska-links-eq i:nth-child(3) {
+    animation-duration: calc(var(--maska-links-dur) * 5.1);
+    animation-delay: calc(var(--maska-links-dur) * -0.4);
+}
+
+.vc-maska-links-eq i:nth-child(4) {
+    animation-duration: calc(var(--maska-links-dur) * 5.8);
+    animation-delay: calc(var(--maska-links-dur) * -2.3);
+}
+
+/* The card over the line: our own layer in body, level with Discord's popup layers */
+.vc-maska-links-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 1002;
+    pointer-events: none;
+}
+
+@keyframes maska-links-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.96);
+    }
+}
+
+.vc-maska-links-card {
+    position: fixed;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    pointer-events: auto;
+    border-radius: 12px;
+    background: var(--dt-menu);
+    border: 1px solid var(--dt-edge);
+    border-top-color: var(--dt-edge-top);
+    backdrop-filter: blur(24px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
+    font: 400 var(--dt-size-body) / 1.35 var(--dt-font-text);
+    color: var(--dt-label);
+    transform-origin: bottom center;
+    animation: maska-links-in var(--maska-links-dur) var(--maska-links-spring);
+}
+
+.vc-maska-links-card * {
+    box-sizing: border-box;
+}
+
+/* The head of the card: a 48 px cover, the track, the buttons */
+.vc-maska-links-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.vc-maska-links-card-art {
+    flex: none;
+    width: 48px;
+    height: 48px;
+}
+
+.vc-maska-links-card-art .vc-maska-links-cover {
+    border-radius: 8px;
+}
+
+.vc-maska-links-card-time {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--dt-label-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.vc-maska-links-card .dt-progress {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--dt-fill-2);
+    overflow: hidden;
+}
+
+.vc-maska-links-card .dt-progress::after {
+    content: "";
+    display: block;
+    height: 100%;
+    width: calc(var(--value, 0) * 100%);
+    border-radius: 2px;
+    background: var(--maska-track, var(--dt-accent));
+    transition:
+        width 500ms linear,
+        background-color 400ms ease;
+}
+
+/* the bar the player can be moved with: a taller hit area, the bar a little thicker under the mouse */
+.vc-maska-links-seek {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 6px 0;
+    margin: -6px 0;
+    cursor: pointer;
+    touch-action: none;
+    border-radius: 4px;
+    outline: none;
+}
+
+.vc-maska-links-seek .dt-progress {
+    transition: height 150ms ease;
+}
+
+.vc-maska-links-seek:hover .dt-progress,
+.vc-maska-links-seek:focus-visible .dt-progress,
+.vc-maska-links-seek[data-dragging] .dt-progress {
+    height: 5px;
+}
+
+.vc-maska-links-seek:focus-visible {
+    box-shadow: 0 0 0 2px var(--dt-accent);
+}
+
+/* while dragging the bar follows the mouse at once */
+.vc-maska-links-seek[data-dragging] .dt-progress::after {
+    transition: none;
+}
+
+.vc-maska-links-controls--big {
+    gap: 4px;
+}
+
+.vc-maska-links-controls--big .vc-maska-links-btn {
+    width: 32px;
+    height: 32px;
+}
+
+.vc-maska-links-controls--big .vc-maska-links-btn--main {
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--dt-accent), white 12%),
+        var(--dt-accent)
+    );
+    border-color: rgb(255 255 255 / 0.22);
+    color: #fff;
+}
+
+/* The words in time, as in kapsula.txt: every line the same size and weight, the current one at full opacity and
+   the rest at 0.3, up to three lines each; the strip slides (620 ms, quintic ease-out) to put the current line in
+   the middle; the old line fades out in 520 ms, the new one in in 380 ms. The window's edges fade by its own
+   height. The times scale with --maska-dur (167 ms), so less motion stops them */
+.vc-maska-links-lyrics {
+    position: relative;
+    height: 150px;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, transparent 0, #000 26%, #000 74%, transparent 100%);
+}
+
+.vc-maska-links-lyrics-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.vc-maska-links-lyric {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    font: 600 17px / 21.5px var(--dt-font-display);
+    color: #fff;
+    opacity: 0.3;
+}
+
+.vc-maska-links-lyric[data-current] {
+    opacity: 1;
+}
+
+.vc-maska-links-lyrics[data-animate] .vc-maska-links-lyrics-list {
+    transition: transform calc(var(--maska-links-dur) * 3.71) cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.vc-maska-links-lyrics[data-animate] .vc-maska-links-lyric {
+    transition: opacity calc(var(--maska-links-dur) * 3.11) cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.vc-maska-links-lyrics[data-animate] .vc-maska-links-lyric[data-current] {
+    transition-duration: calc(var(--maska-links-dur) * 2.28);
+}
+
+/* words without times: a plain list that scrolls */
+.vc-maska-links-lyrics--plain {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    mask-image: none;
+}
+
+.vc-maska-links-lyrics--plain .vc-maska-links-lyric {
+    -webkit-line-clamp: unset;
+    font-size: 15px;
+    color: var(--dt-label-2);
+    opacity: 1;
+}
+
+/* "paste into chat": small, a link rather than a button */
+.vc-maska-links-paste {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    border: none;
+    background: none;
+    color: var(--dt-label-3);
+    font: 400 var(--dt-size-caption) / 1.3 var(--dt-font-text);
+    cursor: pointer;
+}
+
+.vc-maska-links-paste:hover {
+    color: var(--dt-label);
+}
+
+/* the colour of the track on the main button of the card, with a dark icon on it */
+.vc-maska-links-card[data-tinted] .vc-maska-links-controls--big .vc-maska-links-btn--main {
+    background: var(--maska-track);
+    border-color: rgb(255 255 255 / 0.18);
+    color: #141414;
+    transition:
+        transform var(--maska-links-dur) var(--dt-ease-out),
+        background-color 400ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .vc-maska-links-line::after,
+    .vc-maska-links-card .dt-progress::after,
+    .vc-maska-links-card[data-tinted] .vc-maska-links-btn--main {
+        transition: none;
+    }
+
+    .vc-maska-links-eq i,
+    .vc-maska-links-card {
+        animation: none;
+    }
+
+    .vc-maska-links-lyrics[data-animate] .vc-maska-links-lyrics-list,
+    .vc-maska-links-lyrics[data-animate] .vc-maska-links-lyric {
+        transition: none;
+    }
+}

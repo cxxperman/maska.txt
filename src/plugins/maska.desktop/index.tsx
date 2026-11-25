@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { ChatBarButton } from "@api/ChatButtons";
 import { definePluginSettings, Settings } from "@api/Settings";
 import { disableStyle, enableStyle, managedStyleRootNode } from "@api/Styles";
+import { getUserSettingLazy } from "@api/UserSettings";
 import ErrorBoundary from "@components/ErrorBoundary";
 import SettingsPlugin from "@plugins/_core/settings";
 import { IS_WINDOWS } from "@utils/constants";
@@ -14,21 +16,24 @@ import { removeFromArray } from "@utils/misc";
 import { relaunch } from "@utils/native";
 import definePlugin, { IconProps, OptionType, PluginNative } from "@utils/types";
 import { findByPropsLazy, findStoreLazy } from "@webpack";
-import { Alerts, ApplicationStreamingStore, CallStore, ChannelStore, createRoot, FluxDispatcher, GuildMemberStore, GuildStore, MediaEngineStore, RelationshipStore, RestAPI, SelectedChannelStore, useEffect, UserStore, useState, VoiceStateStore } from "@webpack/common";
+import { Alerts, ApplicationStreamingStore, CallStore, ChannelStore, createRoot, FluxDispatcher, GuildMemberStore, GuildStore, MediaEngineStore, NavigationRouter, RelationshipStore, RestAPI, SelectedChannelStore, useEffect, UserStore, useState, VoiceStateStore } from "@webpack/common";
 
 import accentStyle from "./accent.css?managed";
 import { AURA_TOPICS, mountAuraCall, resetAura, setAuraState, unmountAuraCall } from "./aura";
 import auraStyle from "./aura.css?managed";
 import brandStyle from "./brand.css?managed";
 import dockStyle from "./dock.css?managed";
-import { Brand, FamilyButton, FamilyList, setApps } from "./family";
+import { Brand, FamilyButton, FamilyList, getApps, setApps } from "./family";
 import glassStyle from "./glass.css?managed";
 import islandsStyle from "./islands.css?managed";
 import kitStyle from "./kit.css?managed";
+import { getMedia, mediaText, mountLinks, pasteTrack, resetLinks, setLinkState, unmountLinks, useLinks } from "./links";
+import linksStyle from "./links.css?managed";
 import marksStyle from "./marks.css?managed";
 import themeStyle from "./maska.css?managed";
 import { Peek } from "./peek";
 import peekStyle from "./peek.css?managed";
+import { clearPresence, updatePresence } from "./presence";
 import { getSnapshot, installPreset, PRESET_VERSION, restoreSnapshot, Snapshot } from "./preset";
 import promosStyle from "./promos.css?managed";
 import roundedStyle from "./rounded.css?managed";
@@ -37,16 +42,18 @@ import solidStyle from "./solid.css?managed";
 import { PixelIcon } from "./sprites";
 
 // Sent to the hub in hello; the launcher shows it in hub.apps
-const VERSION = "0.6.1";
+const VERSION = "0.7.0";
 
 const Native = VencordNative.pluginHelpers.Maska as PluginNative<typeof import("./native")>;
 // The same Discord internals as the Kapsula plugin next door (kapsula.desktop), nothing new
 const SpeakingStore = findStoreLazy("SpeakingStore");
 const AudioActions = findByPropsLazy("toggleSelfMute", "toggleSelfDeaf");
 const ChannelActions = findByPropsLazy("selectVoiceChannel", "selectChannel");
+// Discord's own status setting, as AutoDNDWhilePlaying changes it
+const StatusSetting = getUserSettingLazy<string>("status", "status")!;
 
 // The switches core.txt may change with settings.set
-const SWITCHES = ["theme", "glass", "rounded", "hidePromos", "slimServers", "familyMarks", "brandAccents", "auraPanel", "shareCalls"] as const;
+const SWITCHES = ["theme", "glass", "rounded", "hidePromos", "slimServers", "familyMarks", "brandAccents", "auraPanel", "islandNotify", "familyFocus", "familyMedia", "familyPresence", "familySteam", "shareCalls"] as const;
 type SettingKey = typeof SWITCHES[number];
 // The themes; Classic is the dev.txt look as it was, Islands lays floating panels and motion on top of it
 const LOOKS = [{ value: "classic", label: "Классическая" }, { value: "islands", label: "Острова" }] as const;
@@ -116,10 +123,46 @@ const settings = definePluginSettings({
         default: true,
         onChange: settingsChanged
     },
+    islandNotify: {
+        type: OptionType.BOOLEAN,
+        description: "Discord notifications on the kapsula.txt island: direct messages and mentions as a card instead of a Windows notification",
+        default: true,
+        onChange: settingsChanged
+    },
+    familyFocus: {
+        type: OptionType.BOOLEAN,
+        description: "Do Not Disturb from core.txt: Discord's status goes to Do Not Disturb with the family and back after",
+        default: true,
+        onChange: settingsChanged
+    },
+    familyMedia: {
+        type: OptionType.BOOLEAN,
+        description: "Music from kapsula.txt over the profile panel, with its buttons, and a chat button to paste it",
+        default: true,
+        onChange: settingsChanged
+    },
+    familyPresence: {
+        type: OptionType.BOOLEAN,
+        description: "Show what plays in kapsula.txt as your Discord activity",
+        default: true,
+        onChange: presenceChanged
+    },
+    familySteam: {
+        type: OptionType.BOOLEAN,
+        description: "Steam downloads from arkada.txt over the profile panel",
+        default: true,
+        onChange: settingsChanged
+    },
     presetApplied: {
         type: OptionType.NUMBER,
         description: "The plugin set version Maska has already turned on",
         default: 0,
+        hidden: true
+    },
+    focusSaved: {
+        type: OptionType.STRING,
+        description: "The status Discord had before Do Not Disturb from core.txt, to bring back after",
+        default: "",
         hidden: true
     }
 });
@@ -137,6 +180,10 @@ let runtimeStyle: HTMLStyleElement | null = null;
 let windowMaterial: typeof Settings.windowsMaterial | undefined;
 let peekRoot: ReturnType<typeof createRoot> | null = null;
 let peekNode: HTMLElement | null = null;
+// The last message sent to the island: a click on its card brings Discord forward on it
+let lastNotified: { at: number; path: string; } | null = null;
+// core.family.focus as last heard; null until the first one after the start
+let lastFocus: boolean | null = null;
 
 function isSpeaking(userId: string) {
     try {
@@ -269,6 +316,16 @@ function settingGroups() {
             ]
         },
         {
+            title: "Семейство",
+            items: [
+                item("islandNotify", "Уведомления Discord на острове", "Личные сообщения и упоминания — карточкой на острове kapsula.txt вместо уведомлений Windows"),
+                item("familyFocus", "„Не беспокоить“ из core.txt", "Discord ставит статус „Не беспокоить“ вместе с семейством и возвращает прежний"),
+                item("familyMedia", "Музыка из kapsula.txt", "Что играет — над панелью профиля, с кнопками"),
+                item("familyPresence", "Музыка в статусе Discord", "„Слушает“ с треком, обложкой и полосой хода — видно друзьям. Для Spotify и Cider статус ставят они сами"),
+                item("familySteam", "Steam из arkada.txt", "Загрузка игры из Steam — над панелью профиля")
+            ]
+        },
+        {
             title: "Звонки",
             items: [
                 item("shareCalls", "Показывать звонки другим приложениям dev.txt", "Кто в звонке и кто говорит; кнопки микрофона, звука и ответа на звонок")
@@ -324,7 +381,7 @@ function SettingsPage() {
                 </div>
             ))}
             <div className="dt-block">
-                <h3>Семейство</h3>
+                <h3>Запущено сейчас</h3>
                 <FamilyList />
             </div>
             <SetupBlock />
@@ -333,6 +390,91 @@ function SettingsPage() {
 }
 
 const SETTINGS_ENTRY = "maska_devtxt";
+
+// The island has notify: the message goes there, as a card, instead of Discord's Windows notification.
+// Called from Discord's message notification, after its own rules (muted servers and channels, its Do Not
+// Disturb, the notification settings) have let it through; true makes Discord go on as if desktop
+// notifications were off for it, so its sound still plays and no Windows notification shows
+function toIsland(arg: any, store: any, never: unknown) {
+    try {
+        if (!running || !settings.store.islandNotify) return false;
+        if (store?.getDesktopType?.() === never) return false;
+        if (!getApps().find(a => a.app === "kapsula")?.commands?.includes("notify")) return false;
+        const message = arg?.message;
+        const ch = message?.channel_id ? ChannelStore.getChannel(message.channel_id) : null;
+        if (!message || !ch) return false;
+
+        const author = message.author ?? {};
+        const name = (ch.guild_id ? GuildMemberStore.getNick(ch.guild_id, author.id) : RelationshipStore.getNickname(author.id))
+            ?? author.global_name ?? author.username ?? "";
+        const where = ch.guild_id ? `#${ch.name}` : ch.isGroupDM() ? ch.name || "" : "";
+        const title = (where ? `${name} · ${where}` : name).slice(0, 60);
+        const text = (message.content?.trim()
+            || (message.sticker_items?.length || message.stickers?.length ? "Стикер" : "")
+            || (message.attachments?.length ? "Вложение" : "")).slice(0, 200);
+
+        Native.request("kapsula", "notify", { title: title || "Discord", text, open: true });
+        lastNotified = { at: Date.now(), path: `/channels/${ch.guild_id ?? "@me"}/${ch.id}/${message.id}` };
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// Discord's status with the family's Do Not Disturb: on, the status goes to dnd and the one before is kept (in a
+// hidden setting, so a restart in between does not lose it); off, it comes back unless it was changed meanwhile.
+// A dnd that was there already is left alone and not "brought back"
+function familyChanged(data: any) {
+    if (!data || typeof data.focus !== "boolean") return;
+    const { focus } = data;
+    const was = lastFocus;
+    lastFocus = focus;
+    if (!running || !settings.store.familyFocus || focus === was) return;
+    try {
+        const saved = settings.store.focusSaved;
+        if (focus && !saved) {
+            const now = StatusSetting.getSetting();
+            if (!now || now === "dnd") return;
+            settings.store.focusSaved = now;
+            StatusSetting.updateSetting("dnd");
+        } else if (!focus && saved) {
+            if (StatusSetting.getSetting() === "dnd") StatusSetting.updateSetting(saved);
+            settings.store.focusSaved = "";
+        }
+    } catch { }
+}
+
+// The Discord activity follows kapsula.media: set on its messages only, taken off when switched off
+function syncPresence() {
+    if (running && settings.store.familyPresence) updatePresence(getMedia());
+    else clearPresence();
+}
+
+function presenceChanged() {
+    syncPresence();
+    settingsChanged();
+}
+
+// The chat bar button: pastes what kapsula.txt plays into the message box, without sending it
+function MediaChatButton() {
+    const { familyMedia } = settings.use(["familyMedia"]);
+    const { media } = useLinks();
+    const text = mediaText(media);
+    if (!familyMedia || !text) return null;
+    return (
+        <ChatBarButton tooltip="Вставить, что играет" onClick={() => pasteTrack(media)}>
+            <NoteIcon />
+        </ChatBarButton>
+    );
+}
+
+function NoteIcon() {
+    return (
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M20 3v12.5a3.5 3.5 0 1 1-2-3.16V7.3l-8 1.6v8.6A3.5 3.5 0 1 1 8 14.34V5.6L20 3Z" />
+        </svg>
+    );
+}
 
 // The maska behind the left edge: Islands only, and only while the server list is folded into its strip
 function PeekRoot() {
@@ -502,6 +644,9 @@ function applyLook() {
     setStyle(marksStyle, running && settings.store.familyMarks);
     setStyle(peekStyle, running);
     setStyle(auraStyle, running && settings.store.auraPanel);
+    setStyle(linksStyle, running && (settings.store.familyMedia || settings.store.familySteam));
+    if (running && (settings.store.familyMedia || settings.store.familySteam)) mountLinks(() => settings.use(["familyMedia", "familySteam"]));
+    else unmountLinks();
     if (running && settings.store.auraPanel) mountAuraCall();
     else unmountAuraCall();
     if (!on) {
@@ -539,6 +684,13 @@ function ringing(args: { channel?: unknown; }) {
 }
 
 const commands: Record<string, (args: any) => unknown> = {
+    // Discord forward; from a card on the island that was just sent (2 minutes at most), on its message too
+    show() {
+        Native.focusWindow();
+        const last = lastNotified;
+        lastNotified = null;
+        if (last && Date.now() - last.at <= 120000) NavigationRouter.transitionTo(last.path);
+    },
     "voice.mute"({ on }) {
         needCalls();
         const now = MediaEngineStore.isSelfMute();
@@ -590,8 +742,15 @@ async function handle(m: { type: string; [key: string]: any; }) {
         setApps(m.data);
         // aura.txt has gone, or the hub with it: what it said no longer holds
         if (!Array.isArray(m.data) || !m.data.some(a => a?.app === "aura")) resetAura();
+        resetLinks(m.data);
+        // kapsula.txt gone: nothing plays any more
+        if (!getMedia()) clearPresence();
+    } else if (m.type === "state" && m.topic === "core.family") {
+        familyChanged(m.data);
     } else if (m.type === "state") {
         setAuraState(m.topic, m.data);
+        setLinkState(m.topic, m.data);
+        if (m.topic === "kapsula.media") syncPresence();
     } else if (m.type === "command") {
         const run = commands[m.name];
         if (!run) return Native.result(m.id, m.from, false, null, "unknown-command");
@@ -628,9 +787,20 @@ export default definePlugin({
     description: "Your look and your calls for Discord: the dev.txt theme (Windows 11 Fluent, transparent Acrylic window, shared accent colour, rounded corners), a ready plugin set, and your call shown to other dev.txt apps on this computer, which can mute, deafen, answer or hang up for you",
     authors: [{ name: "cxxperman", id: 0n }],
     enabledByDefault: true,
+    dependencies: ["UserSettingsAPI"],
     settings,
 
     patches: [
+        {
+            // Discord's desktop notification for a message, the function OnePingPerDM patches too. Its rules have
+            // already run here; where it asks whether desktop notifications are off, toIsland may answer for it.
+            // Inserted before that check, so the check itself (and OnePingPerDM's anchor on it) stays as it was
+            find: '"NotificationStore"',
+            replacement: {
+                match: /(\i\.\i)\.getDesktopType\(\)===(\i\.\i\.NEVER)(?=\))/,
+                replace: "$self.toIsland(arguments[0],$1,$2)||$&"
+            }
+        },
         {
             // the place VencordToolbox puts its button too: the trailing buttons of the title bar (Inbox, Help)
             find: '?"BACK_FORWARD_NAVIGATION":',
@@ -641,6 +811,13 @@ export default definePlugin({
         }
     ],
 
+    toIsland,
+
+    chatBarButton: {
+        icon: NoteIcon,
+        render: MediaChatButton
+    },
+
     renderTitleBarButton: ErrorBoundary.wrap(() => <TitleBarButton key="vc-maska-family" />, { noop: true }),
 
     start() {
@@ -648,7 +825,7 @@ export default definePlugin({
         windowMaterial ??= Settings.windowsMaterial;
         installOnce();
         applyLook();
-        Native.start(VERSION, Object.keys(commands), ["hub.theme", "hub.apps", ...AURA_TOPICS]);
+        Native.start(VERSION, Object.keys(commands), ["hub.theme", "hub.apps", ...AURA_TOPICS, "core.family", "kapsula.media", "kapsula.lyrics", "arkada.downloads"]);
         Native.setIcon(settings.store.familyMarks);
         SettingsPlugin.customEntries.push({
             key: SETTINGS_ENTRY,
@@ -681,6 +858,10 @@ export default definePlugin({
         hubTheme = {};
         setApps([]);
         resetAura();
+        resetLinks(null);
+        clearPresence();
+        lastFocus = null;
+        lastNotified = null;
         unmountPeek();
         removeFromArray(SettingsPlugin.customEntries, e => e.key === SETTINGS_ENTRY);
         applyLook();

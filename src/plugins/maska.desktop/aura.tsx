@@ -7,9 +7,10 @@
 import ErrorBoundary from "@components/ErrorBoundary";
 import { copyWithToast, insertTextIntoChatInputBox } from "@utils/discord";
 import { PluginNative } from "@utils/types";
-import { createRoot, ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
+import { ReactDOM, useEffect, useLayoutEffect, useRef, useState } from "@webpack/common";
 
 import { Brand, useApps } from "./family";
+import { keepSlot } from "./slot";
 import { PixelIcon } from "./sprites";
 
 const Native = VencordNative.pluginHelpers.Maska as PluginNative<typeof import("./native")>;
@@ -66,6 +67,8 @@ function useAura() {
     useEffect(() => {
         const listener = () => update(n => n + 1);
         listeners.add(listener);
+        // what came between the first render and this subscription would otherwise stay unseen
+        listener();
         return () => void listeners.delete(listener);
     }, []);
     return aura;
@@ -93,7 +96,7 @@ let lastTab: Tab = "sounds";
 // kit.txt palette: a pad keeps its colour, picked by its id
 const PAD_COLORS = ["#F08A4B", "#0A84FF", "#6CCB5F", "#FF9F0A", "#8A5CF6", "#FF375F", "#FCE100"];
 
-function padColor(id: string) {
+export function padColor(id: string) {
     let hash = 0;
     for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) | 0;
     return PAD_COLORS[Math.abs(hash) % PAD_COLORS.length];
@@ -481,76 +484,34 @@ function AuraCallButton({ className }: { className: string; }) {
     );
 }
 
-// Keeping the button in the row of the voice panel. There is one slot and one React root for it: the slot is
-// moved into the row whenever the row is there (Discord builds it anew on joining a call), taken out when the
-// row is gone (left the call). One MutationObserver, on the sidebar that holds the panel, or on body until the
-// panel shows up; a slow check notices a sidebar that was replaced as a whole.
-let slot: HTMLElement | null = null;
+// The button in the row of the voice panel: the slot sits there while the row is (Discord builds it anew on
+// joining a call) and is taken out when the row is gone (left the call); keepSlot in slot.ts does the watching
+let stopSlot: (() => void) | null = null;
 // the layer the deck is drawn in, over Discord's columns and level with its popups
 let layer: HTMLElement | null = null;
-let root: ReturnType<typeof createRoot> | null = null;
-let observer: MutationObserver | null = null;
-let watched: Element | null = null;
-let safety: ReturnType<typeof setInterval> | undefined;
-let scheduled = false;
-
-function place() {
-    scheduled = false;
-    if (!slot || !root || !observer) return;
-
-    const panels = document.querySelector('section[class*="panels_"]');
-    const target = panels?.parentElement ?? document.body;
-    if (target !== watched) {
-        observer.disconnect();
-        observer.observe(target, { childList: true, subtree: true });
-        watched = target;
-    }
-
-    const row = panels?.querySelector('[class*="actionButtons_"]');
-    if (row) {
-        if (row.lastElementChild === slot) return;
-        const first = row.querySelector(":scope > button, :scope > div > button");
-        row.appendChild(slot);
-        root.render(<ErrorBoundary noop><AuraCallButton className={first?.className ?? ""} /></ErrorBoundary>);
-    } else if (slot.isConnected) {
-        slot.remove();
-        root.render(null);
-    }
-}
-
-function schedule() {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(place);
-}
 
 export function mountAuraCall() {
-    if (slot) return;
+    if (stopSlot) return;
     try {
-        slot = document.createElement("span");
-        slot.className = "vc-maska-aura-slot";
         layer = document.body.appendChild(document.createElement("div"));
         layer.className = "vc-maska-aura vc-maska-aura-layer";
-        root = createRoot(slot);
-        observer = new MutationObserver(schedule);
-        safety = setInterval(() => watched?.isConnected || schedule(), 3000);
-        place();
+        stopSlot = keepSlot({
+            tag: "span",
+            className: "vc-maska-aura-slot",
+            find: panels => panels.querySelector('[class*="actionButtons_"]'),
+            render: row => {
+                const first = row.querySelector(":scope > button, :scope > div > button");
+                return <ErrorBoundary noop><AuraCallButton className={first?.className ?? ""} /></ErrorBoundary>;
+            }
+        });
     } catch {
         unmountAuraCall();
     }
 }
 
 export function unmountAuraCall() {
-    observer?.disconnect();
-    clearInterval(safety);
-    root?.unmount();
-    slot?.remove();
+    stopSlot?.();
+    stopSlot = null;
     layer?.remove();
     layer = null;
-    observer = null;
-    root = null;
-    slot = null;
-    watched = null;
-    scheduled = false;
 }
-

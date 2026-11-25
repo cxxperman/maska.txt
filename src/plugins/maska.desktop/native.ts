@@ -64,18 +64,24 @@ function takeInbox() {
 export function start(_: IpcMainInvokeEvent, version: string, commands: string[], topics: string[]) {
     hub?.stop();
     inbox = [];
-    hub = connectHub({
+    // The link replaced here may still report its close afterwards (a reload of the page starts a new link without
+    // stopping the old one first): what it says no longer counts, or its "nobody connected" would wipe what the new
+    // link has just brought, the track among it
+    const link = connectHub({
         app: "maska",
         name: "Maska",
         version: String(version),
         commands: commands.map(String),
         topics: topics.map(String),
-        onMessage: deliver,
+        onMessage(message) {
+            if (hub === link) deliver(message);
+        },
         // without the hub nobody is connected: the plugin hears it as an empty hub.apps
         onStatus(online) {
-            if (!online) push({ type: "state", topic: "hub.apps", data: null });
+            if (hub === link && !online) push({ type: "state", topic: "hub.apps", data: null });
         }
     });
+    hub = link;
 }
 
 export function stop(_: IpcMainInvokeEvent) {
@@ -109,6 +115,129 @@ export function request(_: IpcMainInvokeEvent, to: string, name: string, args: u
         });
         link.send({ type: "command", id, to: String(to), name: String(name), args: args ?? {} });
     });
+}
+
+// Discord's window forward, out of the taskbar if it was minimised (the show command)
+export function focusWindow(e: IpcMainInvokeEvent) {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+}
+
+// The cover for the Discord activity, from the open iTunes search, then Deezer's: artist, title (and album) go
+// there, nothing else. The best of 25 results: same title and same artist are a must (no cover rather than someone else's), the
+// album when kapsula.txt names it, else the album version over a single, then the nearest length.
+// One lookup per track, 5 seconds at most; null when there is none
+const covers = new Map<string, Found>();
+
+// lower case, without "(feat. …)", "[2011 Remaster]", " - Live" and the like, without punctuation
+function normal(s: string) {
+    return s.toLowerCase()
+        .replace(/[([][^)\]]*\b(feat|ft|featuring|with|remaster|remastered|remix|live|version|edit|mix|mono|stereo)\b[^)\]]*[)\]]/g, " ")
+        .replace(/\s[-–—]\s.*\b(remaster|remastered|remix|live|version|edit|mono|stereo)\b.*$/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .trim();
+}
+
+// the first artist of "A feat. B", "A & B", "A, B", "A x B"
+function mainArtist(artist: string) {
+    return artist.split(/\s+(?:feat\.?|ft\.?|featuring|with|x)\s+|\s*[,&]\s*/i)[0]?.trim() || artist;
+}
+
+interface Song {
+    trackName?: string;
+    artistName?: string;
+    collectionName?: string;
+    collectionArtistName?: string;
+    trackTimeMillis?: number;
+    artworkUrl100?: string;
+    trackViewUrl?: string;
+}
+
+// What the search found for a track: its cover for the Discord status and its page in Apple Music (or on Deezer)
+interface Found {
+    art: string | null;
+    link: string | null;
+}
+
+function pick(results: Song[], artist: string, title: string, album: string, duration: number) {
+    const wantTitle = normal(title);
+    const wantArtist = normal(mainArtist(artist));
+    const wantAlbum = normal(album);
+    let best: { song: Song; score: number; off: number; } | null = null;
+    for (const song of results) {
+        if (!song?.artworkUrl100 || normal(song.trackName ?? "") !== wantTitle) continue;
+        if (!wantArtist || !normal(song.artistName ?? "").includes(wantArtist)) continue;
+        const collection = normal(song.collectionName ?? "");
+        let score = 0;
+        if (wantAlbum) {
+            if (collection === wantAlbum) score += 100;
+            else if (collection.includes(wantAlbum) || wantAlbum.includes(collection)) score += 50;
+        } else {
+            if (!/\b(single|ep)\b/.test(collection)) score += 20;
+            if (/various artists/i.test(song.collectionArtistName ?? "")) score -= 10;
+        }
+        const off = duration && song.trackTimeMillis ? Math.abs(song.trackTimeMillis / 1000 - duration) : 0;
+        if (!best || score > best.score || (score === best.score && off < best.off)) best = { song, score, off };
+    }
+    return best?.song ?? null;
+}
+
+async function lookUp(artist: string, title: string, album?: string, duration?: number): Promise<Found | null> {
+    artist = String(artist ?? "").trim();
+    title = String(title ?? "").trim();
+    album = String(album ?? "").trim();
+    if (!artist || !title) return null;
+    const key = `${artist}\n${title}\n${album}`;
+    if (covers.has(key)) return covers.get(key)!;
+    const found: Found = { art: null, link: null };
+    const term = encodeURIComponent(`${mainArtist(artist)} ${title}`);
+    const length = Number(duration) || 0;
+    let failed = false;
+    try {
+        const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&limit=25`, { signal: AbortSignal.timeout(5000) });
+        const song = pick((await res.json())?.results ?? [], artist, title, album, length);
+        if (song?.artworkUrl100?.startsWith("https://")) found.art = song.artworkUrl100.replace("100x100", "512x512");
+        // the address without the tracking parameters iTunes adds
+        if (song?.trackViewUrl?.startsWith("https://")) found.link = song.trackViewUrl.replace(/[?&]uo=\d+/, "");
+    } catch {
+        failed = true;
+    }
+    // iTunes knows only what the store sells: much that streams, and many artists who sing in Russian, are missing.
+    // Deezer's open search (no key either) is the second place to look
+    if (!found.art) {
+        try {
+            const res = await fetch(`https://api.deezer.com/search?q=${term}&limit=25`, { signal: AbortSignal.timeout(5000) });
+            const songs: Song[] = ((await res.json())?.data ?? []).map((d: any) => ({
+                trackName: d?.title,
+                artistName: d?.artist?.name,
+                collectionName: d?.album?.title,
+                trackTimeMillis: typeof d?.duration === "number" ? d.duration * 1000 : undefined,
+                artworkUrl100: d?.album?.cover_xl,
+                trackViewUrl: d?.link
+            }));
+            const song = pick(songs, artist, title, album, length);
+            if (song?.artworkUrl100?.startsWith("https://")) found.art = song.artworkUrl100;
+            if (!found.link && song?.trackViewUrl?.startsWith("https://")) found.link = song.trackViewUrl;
+            failed = false;
+        } catch { }
+    }
+    // offline or slow: try again with the next track, not this one
+    if (failed && !found.art) return null;
+    if (covers.size > 200) covers.clear();
+    covers.set(key, found);
+    return found;
+}
+
+export async function artwork(_: IpcMainInvokeEvent, artist: string, title: string, album?: string, duration?: number): Promise<string | null> {
+    return (await lookUp(artist, title, album, duration))?.art ?? null;
+}
+
+// The track's page in Apple Music, for "paste into chat"; null when the catalogue does not have it
+export async function trackLink(_: IpcMainInvokeEvent, artist: string, title: string, album?: string, duration?: number): Promise<string | null> {
+    return (await lookUp(artist, title, album, duration))?.link ?? null;
 }
 
 // Windows reads an .ico only from a file; the png inside it is the fallback

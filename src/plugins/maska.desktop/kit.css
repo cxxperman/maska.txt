@@ -1,13 +1,15 @@
 /*
  * Maska: the kit.txt elements its own pieces of Discord are drawn with: the dev.txt page in Discord's settings,
- * the family popout, the family button in the title bar and the aura.txt popout in the voice panel. A subset of kit.txt ui/kit.css with the tokens it
+ * the family popout, the family button in the title bar, the aura.txt popout in the voice panel and the
+ * music and download lines over the profile panel. A subset of kit.txt ui/kit.css with the tokens it
  * needs (dist/tokens.css, v0.2.0), names and values unchanged, everything scoped to Maska's own containers so
  * Discord is not touched. On while the plugin is.
  */
 
 .vc-maska-page,
 .vc-maska-family,
-.vc-maska-aura {
+.vc-maska-aura,
+.vc-maska-links {
     --dt-brand: #f08a4b;
     --dt-blue: #0a84ff;
     --dt-green: #6ccb5f;
@@ -43,7 +45,8 @@
 @media (prefers-reduced-motion: reduce) {
     .vc-maska-page,
     .vc-maska-family,
-    .vc-maska-aura {
+    .vc-maska-aura,
+    .vc-maska-links {
         --dt-dur-press: 0ms;
         --dt-dur-fast: 0ms;
         --dt-dur-base: 0ms;

@@ -22,6 +22,8 @@ interface HubApp {
 let apps: HubApp[] = [];
 const listeners = new Set<() => void>();
 
+export const getApps = () => apps;
+
 export function setApps(list: unknown) {
     apps = Array.isArray(list) ? list.filter(a => typeof a?.app === "string") : [];
     listeners.forEach(l => l());
@@ -32,6 +34,8 @@ export function useApps() {
     useEffect(() => {
         const listener = () => update(n => n + 1);
         listeners.add(listener);
+        // what came between the first render and this subscription would otherwise stay unseen
+        listener();
         return () => void listeners.delete(listener);
     }, []);
     return apps;
